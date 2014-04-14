@@ -1,0 +1,11 @@
+#!/bin/sh
+
+SSH_ARGS="-F $1"
+HOST=$2
+CMD_PATH=$3
+dst_path=`basename $CMD_PATH`
+
+test -d output/${HOST} || mkdir -p output/${HOST}
+
+scp ${SSH_ARGS} $CMD_PATH ${HOST}:/tmp/${dst_path} && ssh ${SSH_ARGS} ${HOST} sh /tmp/${dst_path} > output/${HOST}/${dst_path} 2>&1 &
+echo $!

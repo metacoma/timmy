@@ -1,0 +1,1 @@
+tcpdump -c1 -ni eth0 'proto \icmp'

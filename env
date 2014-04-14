@@ -1,0 +1,259 @@
+#PROVIANT_LIBEXEC=${PROVIANT_LIBEXEC:-/home/proviant/proviant/scripts}
+#PROVIANT_LOG_DIR=${PROVIANT_LOG_DIR}
+
+
+hook_env_init() {
+    export SSH_ARGS="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ConnectTimeout=7"
+
+    export INFRA_FTP=159.253.146.221
+
+    CONFIG_FILE=$1
+    shift
+
+    export PROVIANT_LIBEXEC=${HOOK_LIBEXEC_DIR}
+    export PROVIANT_LOG_DIR=$(config_get_value log.dir)
+    export PROVIANT_URL="$(config_get_value listen.host):$(config_get_value listen.port)"
+}
+
+bootstrap_server() {
+    deploy_script=$1
+    ip=$2
+    shift
+
+    LOG_DIR=${PROVIANT_LOG_DIR}/${ENV_ID}
+
+    [ ! -d ${LOG_DIR}/ ] && {
+        mkdir -p $LOG_DIR ||  {
+            echo "Can't create log dir ${LOG_DIR}"
+            return 1
+        }
+    }
+
+    ${PROVIANT_LIBEXEC}/${deploy_script} $* 2>&1 | tee ${LOG_DIR}/${deploy_script}_${ip}.log
+
+    exit_code=${PIPESTATUS[0]}
+
+    if [ ${exit_code} -ne 0 ]; then
+        echo "Boostrap $deploy_script $* failed"
+        exit 2
+    fi
+
+    return ${exit_code}
+}
+
+wait_for_success() {
+    cmd=$1
+    refresh_sec=${2:-5}
+    timeout_sec=${3:-300}
+    echo "waiting_for: ${cmd} refresh: $refresh_sec} timeout: ${timeout_sec}" > /dev/stderr
+
+    started=`date "+%s"`
+
+    eval $cmd > /dev/null
+    exit_code=$?
+
+    while [ ${exit_code} -ne 0 ]; do
+        sleep ${refresh_sec}
+
+        eval $cmd > /dev/null
+        exit_code=$?
+
+        running=$((`date +%s` - ${started}))
+
+        echo "waiting_for ${cmd} running: ${running} timeout: ${timeout_sec}" > /dev/stderr
+        [ ${running} -gt ${timeout_sec} ] && break
+
+    done
+
+    echo "waiting_for '${cmd}' code: ${exit_code}" > /dev/stderr
+    return ${exit_code}
+}
+
+wait_for_alive() {
+    return $(wait_for_success "fping $1 | grep alive" 5 600)
+}
+
+wait_for_dead() {
+    return $(wait_for_success "fping $1 | grep -v alive")
+}
+
+wait_for_tcp_service() {
+    ip=$1
+    port=$2
+    shift 2
+    return $(wait_for_success "echo | nc $ip $port" $*)
+}
+
+wait_for_ssh() {
+    ip=$1
+    shift
+    return $(wait_for_tcp_service $ip 22 $*)
+}
+
+wait_for_http() {
+    ip=$1
+    shift
+    return $(wait_for_tcp_service $ip 80 $*)
+}
+
+wait_for_fuel_nodes_ready() {
+    fuel_ip=$
+    nodes_count=$2
+    wait_for_success $(wait_for_success "python ${PROVIANT_LIBEXEC}/fuel_nodes_count.py ${fuel_ip} | grep '\^${nodes_count}\$\'")
+
+}
+
+
+server_reboot() {
+    ip=$1
+    login=$2
+    data=$3
+
+    #XXX Possible bug
+    if [ -f ${data} ]; then
+	# suppose data is path to key
+	cmd="ssh $SSH_ARGS -i $data ${login}@${ip} reboot"
+	else
+        cmd="sshpass -p ${data} ssh $SSH_ARGS ${login}@${ip} reboot"
+    fi
+    echo $cmd
+
+    eval $cmd
+}
+
+server_key_copy() {
+    keypath=$1
+    ip=$2
+    login=$3
+    password=$4
+    port=$5
+
+    echo sshpass -p ${password} ssh-copy-id -i ${keypath} \"${login}@${ip} -p ${port}\"
+    sshpass -p ${password} ssh-copy-id -i ${keypath} "${login}@${ip} -p ${port}"
+}
+
+wait_for_server_available() {
+    ip=$1
+    wait_for_alive ${ip} || return 1
+    wait_for_ssh ${ip} || return 1
+    return $?
+}
+
+wait_for_fuel_nodes_ready() {
+    return 1
+}
+
+
+proviant_env_update() {
+    env_id=$1
+    data=$2
+
+    curl -H 'Content-type: application/json' -X POST -d "$data" ${PROVIANT_URL}/remote/datacenters/${env_id} #>/dev/stderr
+}
+
+proviant_env_update_state() {
+    env_id=$1
+    state=$2
+    proviant_env_update $env_id "{ \"state\": \"$state\" }"
+}
+
+proviant_env_update_stage() {
+    env_id=$1
+    stage=$2
+    proviant_env_update $env_id "{ \"stage\": \"$stage\" }"
+}
+
+proviant_env_update_progress() {
+    env_id=$1
+    progress=$2
+    proviant_env_update $env_id "{ \"progress\": $progress }"
+}
+
+proviant_env_update_horizonURL() {
+    env_id=$1
+    url=$2
+    proviant_env_update $env_id "{ \"horizonURL\": \"$url\" }"
+}
+
+proviant_env_update_managementURL() {
+    env_id=$1
+    url=$2
+    proviant_env_update $env_id "{ \"managementURL\": \"$url\" }"
+}
+
+# catch exit from master.sh ?
+master_error() {
+    exit_code=$1
+    proviant_env_update_state "Error"
+    exit ${exit_code}
+}
+
+wait_for_slaves_ready() {
+    master_ip=$1
+    master_login=$2
+    master_pass=$3
+    shift 3
+
+    while [ -n "$*" ]; do
+        slave_ip=$1
+        slave_login=$2      # not used
+        slave_password=$3   # not used
+        slave_local_ip=$4   # not used
+        sshpass -p${master_pass} ssh $SSH_ARGS ${master_login}@${master_ip} ssh ${SSH_ARGS} -i /root/.ssh/bootstrap.rsa root@${slave_ip} ls -l /etc/nailgun_uid
+        sshpass -p${master_pass} ssh $SSH_ARGS ${master_login}@${master_ip} ssh ${SSH_ARGS} -i /root/.ssh/bootstrap.rsa root@${slave_ip} test -f /etc/nailgun_uid >/dev/null 2>&1 || {
+            return 1
+        }
+        shift 4
+    done
+    return 0
+}
+
+waiting_for_background_jobs() {
+	success=0
+	background_jobs=$1
+	while [ -n "`echo $background_pids | sed -r 's/  +//g'`" ]; do
+	    #echo "Waiting for pids: $background_pids"
+	    for pid in $background_pids; do
+	        pgrep ${pid} > /dev/stderr || {
+	            wait ${pid}
+	            if [ $? -eq 0 ]; then
+	                echo "pid ${pid} done with exit status: $?" > /dev/stderr
+	                success=$((success + 1))
+	            fi
+	            background_pids=`echo $background_pids | sed -r 's/(^| )'${pid}'($| )/ /g'`
+	        }
+	    done
+	    sleep 2
+	done
+}
+
+
+configure_zabbix_agent() {
+
+        fuelweb_run_local=$1
+
+        ZABBIXSRV_IP=159.253.146.221
+
+        HOSTNAME=`${fuelweb_run_local} hostname -s`
+
+
+
+        echo 'Zabbix configuration stared on '${HOSTNAME}
+
+
+
+        ${fuelweb_run_local} "sed -i \"s/^Server=.*/Server=${ZABBIXSRV_IP}/g\" /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "sed -i \"s/^ServerActive=.*/ServerActive=$ZABBIXSRV_IP/g\" /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "sed -i \"s/^Hostname=.*/Hostname=$HOSTNAME/g\" /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=mcollective\' /etc/zabbix_agentd.conf || echo \"UserParameter=mcollective,ps -ef | grep /usr/sbin/mcollectived | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=rabbitmq\'    /etc/zabbix_agentd.conf || echo \"UserParameter=rabbitmq,ps -ef | grep /usr/sbin/rabbitmq-server | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=ostf-server\' /etc/zabbix_agentd.conf || echo \"UserParameter=ostf-server,ps -ef | grep /opt/fuel_plugins/ostf/bin/ostf-server | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=nailgun\'     /etc/zabbix_agentd.conf || echo \"UserParameter=nailgun,ps -ef | grep /opt/nailgun/bin/nailgund | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=cobbler\'     /etc/zabbix_agentd.conf || echo \"UserParameter=cobbler,ps -ef | grep /usr/bin/cobblerd | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=dnsmasq\'     /etc/zabbix_agentd.conf || echo \"UserParameter=dnsmasq,ps -ef | grep /usr/sbin/dnsmasq | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "grep -q -e \'UserParameter=postgres\'    /etc/zabbix_agentd.conf || echo \"UserParameter=postgres,ps -ef | grep /usr/bin/postmaster | grep -v grep | wc -l\" >> /etc/zabbix_agentd.conf"
+        ${fuelweb_run_local} "mkdir -p /var/run/zabbix && chown -R zabbix:zabbix /var/run/zabbix"
+
+        echo 'Zabbix configuration finished.'
+
+}
