@@ -65,3 +65,14 @@ Then create hosts entry for the node:
     
 Run `collect.sh` script and look for the disk usage information in file
 `output/cmp1.domain.tld/df`.
+
+## Available checks
+
+Currently, following checks are implemented in Timmy
+
+* `date` returns current date set on the machine
+* `df` returns current disk usage in human-readable format
+* `du` collects sizes of directories in the root directory (`/`)
+* `ifconfig` collects configuration of network interfaces in standard ifconfig format
+* `ip` returns current ARP neighbours table for the target node
+* `ps` collects full list of processes running on the target machine
