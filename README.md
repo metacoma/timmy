@@ -8,6 +8,7 @@ Example usage:
 
 --------------
 Scripts dir:
+
     scripts/compute     - place for scripts to be run on compute nodes
 
     scripts/controller  - for controller nodes
