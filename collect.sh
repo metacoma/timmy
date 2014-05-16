@@ -47,7 +47,9 @@ tmpdir=`date "+%s" | md5sum -`
 
 for host in `egrep -i ^Host $1 | awk '{print $2}'`; do
      # parralel jobs
-     pids="${pids} `find hosts/${host} -type l 2>/dev/null| xargs -P20 -I% ./run_cmd $1 ${host} %`"
+     echo $host
+     pids="${pids} `find hosts/${host} -type f 2>/dev/null| xargs -P20 -I% ./run_cmd $1 ${host} %`"
+     echo run $pids
 done
 # sequence jobs
 pids="${pids} `find hosts/* -mindepth 2 | xargs -P20 -I% ./run_cmd $1 ${host} %`"
