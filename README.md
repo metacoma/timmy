@@ -19,7 +19,7 @@ has access to Fuel API and to nodes of the OpenStack cluster via SSH.
 Once you've cloned the repo, run the following command to grab initial
 configuraiton from Fuel:
 
-    ./timmy.sh fuel-master.node.tld
+    sh timmy.sh [path to ssh key, by default /root/.ssh/id_rsa]
 
 It will create a file named `ssh_config` with addresses and credentials of nodes
 of OpenStack cluster installed by Fuel.
@@ -39,9 +39,6 @@ host (which is also defined in `ssh_config`).
 
 Output of commands with system configuration data will be stored to `output/`
 directory in Timmy root folder.
-
-Example usage:
-    sh timmy.sh [path to ssh key, by default /root/.ssh/id_rsa]
 
 Special environemnt variables:
 
