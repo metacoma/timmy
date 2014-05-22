@@ -87,3 +87,14 @@ Scripts dir:
     scripts/compute     - place for scripts to be run on compute nodes
 
     scripts/controller  - for controller nodes
+
+## Available checks
+
+Currently, following checks are implemented in Timmy
+
+* `date` returns current date set on the machine
+* `df` returns current disk usage in human-readable format
+* `du` collects sizes of directories in the root directory (`/`)
+* `ifconfig` collects configuration of network interfaces in standard ifconfig format
+* `ip` returns current ARP neighbours table for the target node
+* `ps` collects full list of processes running on the target machine
